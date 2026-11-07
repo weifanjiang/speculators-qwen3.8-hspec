@@ -120,7 +120,7 @@ dev = [
     "plotly",
 
     # code quality
-    "mypy~=2.1.0",
+    "mypy~=2.4.1",
     "ruff~=0.15.20",
     "pre-commit~=4.6",
 
