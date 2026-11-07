@@ -240,12 +240,13 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
         return model
 
     def init_from_verifier(self, verifier: str) -> None:
-        # q_proj is skipped: Qwen3.5 verifiers gate the q_proj output (2x q_size),
-        # which does not fit the drafter's plain Qwen3-style projection, so the
-        # drafter q_proj stays randomly initialized. q_norm/k_norm apply gain
+        # NEW: (was: q_proj is skipped and stays randomly initialized; see below.) q_norm/k_norm apply gain
         # (1 + w) in Qwen3.5 but plain w in the drafter's Qwen3RMSNorm, so they
         # are copied as (1 + w) to preserve the verifier's scaling.
-        names = ("k_proj", "v_proj", "o_proj", "q_norm", "k_norm")
+        # NEW: q_proj is copied too, as in the H-Spec paper recipe (--init-q-proj verifier). For
+        # NEW: gated verifiers (Qwen3.5/3.8) each head's q_proj rows are [query | gate]; the query
+        # NEW: half is taken.
+        names = ("q_proj", "k_proj", "v_proj", "o_proj", "q_norm", "k_norm")  # NEW: + q_proj
         gemma_style_norms = _verifier_model_type(verifier) in (
             GEMMA_STYLE_FINAL_NORM_MODEL_TYPES
         )
@@ -263,6 +264,9 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
             for name in names:
                 weight = weights.get(f"model.layers.{layer_id}.self_attn.{name}.weight")
                 param = getattr(layer.self_attn, name).weight
+                if weight is not None and name == "q_proj" and weight.shape[0] == 2 * param.shape[0]:
+                    heads = param.shape[0] // layer.self_attn.head_dim  # NEW: gated q_proj -> query half
+                    weight = weight.view(heads, 2, layer.self_attn.head_dim, -1)[:, 0].reshape(param.shape)  # NEW
                 if weight is not None:
                     if gemma_style_norms and name in ("q_norm", "k_norm"):
                         weight = 1.0 + weight.float()
